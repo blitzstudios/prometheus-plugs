@@ -56,10 +56,11 @@ defmodule Prometheus.PlugExporter do
   use Prometheus.Metric
 
   use Prometheus.Config,
-    path: "/metrics",
-    format: :auto,
-    registry: :default,
-    auth: false
+      path: "/metrics",
+      format: :auto,
+      registry: :default,
+      auth: false,
+      endpoints: []
 
   ## TODO: support multiple endpoints [for example separate endpoint for each registry]
   ##  endpoints: [[registry: :qwe,
@@ -74,6 +75,7 @@ defmodule Prometheus.PlugExporter do
     path = Plug.Router.Utils.split(Config.path(module_name))
     auth = Config.auth(module_name)
     format = normalize_format(Config.format(module_name))
+    endpoints = Config.endpoints(module_name) |> Enum.into(%{})
 
     quote do
       @behaviour Plug
@@ -100,16 +102,26 @@ defmodule Prometheus.PlugExporter do
       end
 
       def call(conn, _opts) do
-        case conn.path_info do
-          unquote(path) ->
-            unquote(handle_auth(auth))
-
+        case endpoints |> length do
+          0 ->
+            case conn.path_info do
+              unquote(path) ->
+                unquote(handle_auth(auth))
+              _ ->
+                conn
+            end
           _ ->
-            conn
+            case Map.get(conn.path_info) do
+              nil ->
+                conn
+              unquote(path) ->
+                unquote(handle_auth(auth))
+            end
         end
+
       end
 
-      defp scrape_data(conn) do
+      defp scrape_data(conn, registry \\ :default) do
         {content_type, format} = negotiate(conn)
         labels = [unquote(registry), content_type]
 
@@ -121,7 +133,7 @@ defmodule Prometheus.PlugExporter do
               labels: labels
             ],
             fn ->
-              format.format(unquote(registry))
+              format.format(registry)
             end
           )
 
@@ -187,7 +199,7 @@ defmodule Prometheus.PlugExporter do
     end
   end
 
-  defp handle_auth(auth) do
+  defp handle_auth(auth, registry \\ :default) do
     case auth do
       false ->
         send_metrics()
@@ -207,9 +219,9 @@ defmodule Prometheus.PlugExporter do
     end
   end
 
-  defp send_metrics() do
+  defp send_metrics(registry \\ :default) do
     quote do
-      {content_type, scrape} = scrape_data(conn)
+      {content_type, scrape} = scrape_data(conn, registry)
 
       conn
       |> put_resp_content_type(content_type, nil)
